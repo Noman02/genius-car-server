@@ -2,6 +2,7 @@ const express = require("express");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
 const cors = require("cors");
+const jwt = require("jsonwebtoken");
 const port = process.env.PORT || 5000;
 require("dotenv").config();
 
@@ -21,9 +22,52 @@ async function run() {
   try {
     const serviceCollection = client.db("geniusCar").collection("services");
     const ordersCollection = client.db("geniusCar").collection("orders");
+
+    function verifyJWT(req, res, next) {
+      const authHeader = req.headers.authorization;
+      if (!authHeader) {
+        return res.status(401).send({ message: "unauthorized access" });
+      }
+
+      const token = authHeader.split(" ")[1];
+      jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (error, decoded) => {
+        if (error) {
+          return res.status(401).send({ message: "unauthorized access" });
+        }
+        req.decoded = decoded;
+        next();
+      });
+    }
+
+    app.post("/jwt", (req, res) => {
+      const user = req.body;
+      const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
+        expiresIn: "1d",
+      });
+      res.send({ token });
+      console.log(user);
+    });
+
     app.get("/services", async (req, res) => {
-      const query = {};
-      const cursor = serviceCollection.find(query);
+      const search = req.query.search;
+      let query = {};
+      if (search.length) {
+        query = {
+          $text: {
+            $search: search,
+          },
+        };
+      }
+      // const query = { price: { $gt: 100, $lt: 300 } };
+      // const query = { price: { $eq: 200 } };
+      // const query = { price: { $gte: 200 } };
+      // const query = { price: { $lte: 200 } };
+      // const query = { price: { $ne: 200 } };
+      // const query = { price: { $in: [30, 150, 45] } };
+      // const query = { price: { $nin: [30, 150, 45] } };
+      // const query = { $and: [{ price: { $gt: 20 } }, { price: { $gt: 100 } }] };
+      const order = req.query.order === "asc" ? 1 : -1;
+      const cursor = serviceCollection.find(query).sort({ price: order });
       const services = await cursor.toArray();
       res.send(services);
     });
@@ -35,7 +79,14 @@ async function run() {
     });
 
     //orders api
-    app.get("/orders", async (req, res) => {
+    app.get("/orders", verifyJWT, async (req, res) => {
+      const decoded = req.decoded;
+      console.log("inside orders ", decoded);
+      if (decoded.email !== req.query.email) {
+        res.status(403).send({ message: "unauthorized access" });
+      }
+      console.log(req.headers.authorization);
+
       let query = {};
       if (req.query.email) {
         query = {
@@ -47,14 +98,14 @@ async function run() {
       res.send(orders);
     });
 
-    app.post("/orders", async (req, res) => {
+    app.post("/orders", verifyJWT, async (req, res) => {
       const order = req.body;
       const result = await ordersCollection.insertOne(order);
       res.send(result);
     });
 
     //update
-    app.patch("/orders/:id", async (req, res) => {
+    app.patch("/orders/:id", verifyJWT, async (req, res) => {
       const id = req.params.id;
       const status = req.body.status;
       const query = { _id: ObjectId(id) };
@@ -68,7 +119,7 @@ async function run() {
     });
 
     // delete order
-    app.delete("/orders/:id", async (req, res) => {
+    app.delete("/orders/:id", verifyJWT, async (req, res) => {
       const id = req.params.id;
       const query = { _id: ObjectId(id) };
       const result = await ordersCollection.deleteOne(query);
